@@ -16,6 +16,7 @@
 static const int request_internal_ = 2;
 static const int request_timeout_ = 10;
 static const int ping_internal_ = 5;
+static const int ping_timeout_ = 12;
 
 typedef enum {
     p_req = 0,
@@ -58,21 +59,20 @@ typedef struct {
 
     int last_req_time;
     int first_req_time;
-    int last_ping_time;
+    int last_ping_req_time;
+    int last_ping_resp_time;
 
     /* Indicate state changed from last notification.
      */ 
     int state_changed;
 
+    /* Set 1 if aggressive check timeout or ping timeout.
+     */
     int timeout;
 } pair_;
 
 typedef struct {
-    /*pair_ *pairs;
-    int pairs_used;
-    int pairs_size;*/
     array *pairs;
-
     connective_events events;
 } connective_;
 
@@ -117,7 +117,8 @@ static pair_* connective_add_pair_(connective *c,
     pr.insist_resp = 0;
     pr.last_req_time = 0;
     pr.first_req_time = 0;
-    pr.last_ping_time = 0;
+    pr.last_ping_req_time = 0;
+    pr.last_ping_resp_time = 0;
     pr.state_changed = 0;
     pr.timeout = 0;
 
@@ -240,6 +241,7 @@ int connective_on_recv_data(connective *c,
                 const struct sockaddr *remote,
                 const char *data, 
                 int data_len) {
+    time_t now = time(0);
     int type = data[0];
 
     char addr_local[100], addr_remote[100];
@@ -276,7 +278,16 @@ int connective_on_recv_data(connective *c,
             /* Indicate to send response */
             pr->insist_resp = 1;
         }
-    } 
+    }
+    if( type==p_ping_req ) {
+        if( pr )
+            connective_send_ping_resp_(c, &pr->local, &pr->remote);
+        /* Else !pr, ping attack? */
+    }
+    if( type==p_ping_resp ) {
+        if( pr )
+            pr->last_ping_resp_time = now;
+    }
     
     return 0;
 }
@@ -323,17 +334,26 @@ int connective_drive(connective *c) {
             /* Last response */
             connective_send_resp_(c, &pr->local, &pr->remote);
             pr->insist_resp = 0;
-
             events++;
         }
 
         /* Ping */
-        /*if( pr->l_state==s_done &&
+        if( pr->l_state==s_done &&
                         pr->r_state==s_done &&
-                        now-pr->last_ping_time>ping_internal_ ) {
+                        now-pr->last_ping_req_time>ping_internal_ ) {
             connective_send_ping_req_(c, &pr->local, &pr->remote);
             events++;
-        }*/
+            
+            pr->last_ping_req_time = now;
+            if( pr->last_ping_resp_time==0 )
+                pr->last_ping_resp_time = now;
+        }
+        if( pr->l_state==s_done &&
+                        pr->r_state==s_done &&
+                        now-pr->last_ping_resp_time>ping_timeout_ ) {
+            /* Ping timeout */
+            pr->timeout = 1;
+        }
         
         if( pr->state_changed==1 ) {
             cc->events.on_state_change(c, &pr->local, &pr->remote, pr->l_state, pr->r_state);
