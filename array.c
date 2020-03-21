@@ -2,7 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-static const int ARRAY_INC_SIZE=10;
+static const int array_inc_size_=10;
 
 /* Private functions */
 static char* retrive_data_(array *arr) {
@@ -12,7 +12,7 @@ static char* retrive_data_(array *arr) {
 
 /* APIs */
 array* array_create(int element_size) {
-    int size = sizeof(array)+ARRAY_INC_SIZE*element_size;
+    int size = sizeof(array)+array_inc_size_*element_size;
     array *arr = malloc( sizeof(array) );
     arr->size = 0;
     arr->cap = 0;
@@ -24,8 +24,8 @@ array* array_append(array *arr, const void *element) {
     char *data = retrive_data_(arr);
     if( arr->cap-arr->size==0 ) {
         /* Extend */
-        arr = realloc(arr, sizeof(array)+(arr->cap+ARRAY_INC_SIZE)*arr->elesize);
-        arr->cap += ARRAY_INC_SIZE;
+        arr = realloc(arr, sizeof(array)+(arr->cap+array_inc_size_)*arr->elesize);
+        arr->cap += array_inc_size_;
     }
 
     memcpy( data+arr->size*arr->elesize, element, arr->elesize );

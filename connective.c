@@ -13,19 +13,22 @@
  * --------------------------------
  */
 
-#define PAIRS_INC_SIZE 100
-
-#define REQUEST_INTERNAL 2
-#define PING_INTERNAL 2
+static const int request_internal_ = 2;
+static const int request_timeout_ = 10;
+static const int ping_internal_ = 5;
 
 typedef enum {
     p_req = 0,
     p_resp,
+    p_ping_req,
+    p_ping_resp
 } pack_;
 
 const static char* pack_type_string[] = {
     "p_req",
-    "p_resp"
+    "p_resp",
+    "p_ping_req",
+    "p_ping_resp"
 };
 
 typedef struct {
@@ -54,11 +57,14 @@ typedef struct {
     int insist_resp;
 
     int last_req_time;
+    int first_req_time;
     int last_ping_time;
 
     /* Indicate state changed from last notification.
      */ 
     int state_changed;
+
+    int timeout;
 } pair_;
 
 typedef struct {
@@ -110,51 +116,61 @@ static pair_* connective_add_pair_(connective *c,
     pr.r_state = s_init;
     pr.insist_resp = 0;
     pr.last_req_time = 0;
+    pr.first_req_time = 0;
     pr.last_ping_time = 0;
     pr.state_changed = 0;
+    pr.timeout = 0;
 
     connective_ *cc = (connective_*)c;
     cc->pairs = array_append(cc->pairs, &pr);
     return array_tail(cc->pairs);
 }
 
-static int connective_send_req_(connective *c,
+static int connective_send_(connective *c,
                 const struct sockaddr *local,
-                const struct sockaddr *remote) {
+                const struct sockaddr *remote,
+                int type) {
     char addr_local[100], addr_remote[100];
     int port_local, port_remote;
     net_inet_ntop(local, addr_local, sizeof(addr_local));
     net_inet_ntop(remote, addr_remote, sizeof(addr_remote));
     port_local = net_address_port(local);
     port_remote = net_address_port(remote);
-    log_trace("send_req Local{%s:%d} ----> Remote{%s:%d}\n",
+    log_trace("send %s. Local{%s:%d} ----> Remote{%s:%d}\n",
+                    pack_type_string[type],
                     addr_local, port_local,
                     addr_remote, port_remote);
 
     connective_ *cc = (connective_*)c;
     char buf[128] = {0};
-    buf[0] = p_req;
+    buf[0] = type;
     return cc->events.on_send_data(c, local, remote, buf, 1);
+}
+
+static int connective_send_req_(connective *c,
+                const struct sockaddr *local,
+                const struct sockaddr *remote) {
+    return connective_send_(c, local, remote, p_req);
 }
 
 static int connective_send_resp_(connective *c,
                 const struct sockaddr *local,
                 const struct sockaddr *remote) {
-    char addr_local[100], addr_remote[100];
-    int port_local, port_remote;
-    net_inet_ntop(local, addr_local, sizeof(addr_local));
-    net_inet_ntop(remote, addr_remote, sizeof(addr_remote));
-    port_local = net_address_port(local);
-    port_remote = net_address_port(remote);
-    log_trace("send_resp Local{%s:%d} ----> Remote{%s:%d}\n",
-                    addr_local, port_local,
-                    addr_remote, port_remote);
-
-    connective_ *cc = (connective_*)c;
-    char buf[128] = {0};
-    buf[0] = p_resp;
-    return cc->events.on_send_data(c, local, remote, buf, 1);
+    return connective_send_(c, local, remote, p_resp);
 }
+
+static int connective_send_ping_req_(connective *c,
+                const struct sockaddr *local,
+                const struct sockaddr *remote) {
+    return connective_send_(c, local, remote, p_ping_req);
+}
+
+static int connective_send_ping_resp_(connective *c,
+                const struct sockaddr *local,
+                const struct sockaddr *remote) {
+    return connective_send_(c, local, remote, p_ping_resp);
+}
+
 /* Private functions end */
 
 /* APIs */
@@ -236,19 +252,23 @@ int connective_on_recv_data(connective *c,
                     pack_type_string[type],
                     addr_local, port_local,
                     addr_remote, port_remote);
-
     pair_ *pr = connective_lookup_(c, local, remote);
-    if(!pr)
-        pr = connective_add_pair_(c, local, remote);
-
     if( type==p_resp ) {
-        /* Aggressive check, get response */
-        if( pr->l_state==s_req_sent ) {
-            pr->l_state = s_done;
-            pr->state_changed = 1;
+        /* Aggressive check, response from other side */
+        if( pr ) {
+            if( pr->l_state==s_req_sent ) {
+                pr->l_state = s_done;
+                pr->state_changed = 1;
+            }
         }
-    } else if( type==p_req ) {
+        /* Else if !pr, p_resp attack? */
+    } 
+    if( type==p_req ) {
         /* Passive check */
+        if( !pr ) {
+            /* Passive add check */
+            pr = connective_add_pair_(c, local, remote);
+        }
         if( pr->r_state==s_init ) {
             pr->r_state = s_req_recvd;
             pr->state_changed = 1;
@@ -267,24 +287,28 @@ int connective_drive(connective *c) {
     time_t now = time(0);
     for(int i=0 ;i<cc->pairs->size; i++) {
         pair_ *pr = array_at(cc->pairs, i);
+
         /* l_state */
         if( pr->l_state==s_init ) {
             /* Launch aggressive check */
             connective_send_req_(c, &pr->local, &pr->remote);
             pr->l_state = s_req_sent;
             pr->last_req_time = now;
+            pr->first_req_time = now;
 
             pr->state_changed = 1;
             events++;
         }
-        if( pr->l_state==s_req_sent 
-                        && now-pr->last_req_time>REQUEST_INTERNAL) {
-            /* Retry aggressive check on internal */
-            connective_send_req_(c, &pr->local, &pr->remote);
-            pr->last_req_time = now;
-
-            pr->state_changed = 1;
-            events++;
+        if( pr->l_state==s_req_sent ) {
+            if(now-pr->first_req_time>=request_timeout_) {
+                /* Aggressive check timeout */
+                pr->timeout = 1;
+            } else if(now-pr->last_req_time>=request_internal_) {
+                /* Retry aggressive check on internal */
+                connective_send_req_(c, &pr->local, &pr->remote);
+                pr->last_req_time = now;
+                events++;
+            }
         }
 
         /* r_state */
@@ -303,12 +327,29 @@ int connective_drive(connective *c) {
             events++;
         }
 
-        /* TODO: ping */
+        /* Ping */
+        /*if( pr->l_state==s_done &&
+                        pr->r_state==s_done &&
+                        now-pr->last_ping_time>ping_internal_ ) {
+            connective_send_ping_req_(c, &pr->local, &pr->remote);
+            events++;
+        }*/
         
-        if(pr->state_changed==1) {
+        if( pr->state_changed==1 ) {
             cc->events.on_state_change(c, &pr->local, &pr->remote, pr->l_state, pr->r_state);
             pr->state_changed = 0;
         }
+    }
+
+    /* Remove timeout */
+    for(int i=0 ;i<cc->pairs->size; ) {
+        pair_ *pr = array_at(cc->pairs, i);
+        if( !pr->timeout ) {
+            i++;
+            continue;
+        }
+        cc->events.on_timeout(c, &pr->local, &pr->remote);
+        array_remove(cc->pairs, i);
     }
     return events;
 }

@@ -60,14 +60,28 @@ static int on_state_change (connective *c,
     port_local = net_address_port(local);
     port_remote = net_address_port(remote);
 
-    log_trace("on_state_change, Local{%s:%d}-->Remote{%s:%d}, l_state: %s, r_state: %s\n",
+    log_trace("on_state_change, Local{%s:%d}-->Remote{%s:%d}, l_state: %s, r_state: %s.\n",
                     addr_local, port_local,
                     addr_remote, port_remote,
                     connective_state_string[l_state],
                     connective_state_string[r_state]);
     return 0;
 }
+int on_timeout(connective *c,
+                    const struct sockaddr *local,
+                    const struct sockaddr *remote) {
+    char addr_local[100], addr_remote[100];
+    int port_local, port_remote;
+    net_inet_ntop(local, addr_local, sizeof(addr_local));
+    net_inet_ntop(remote, addr_remote, sizeof(addr_remote));
+    port_local = net_address_port(local);
+    port_remote = net_address_port(remote);
 
+    log_trace("on_timeout, Local{%s:%d}-->Remote{%s:%d}.\n",
+                    addr_local, port_local,
+                    addr_remote, port_remote);
+    return 0;
+}
 
 int main(int argc, char **argv) {
     const char *prog = argv[0];
@@ -130,7 +144,7 @@ int main(int argc, char **argv) {
     connective_events cevents = {
         on_send_data,
         on_state_change,
-        0
+        on_timeout
     };
     connective_attach_events(c, cevents);
     connective_create_check(c,
