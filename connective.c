@@ -11,6 +11,9 @@
  * --------------------------------
  * |pack(1) |version(1)|reserve(2)|
  * --------------------------------
+ *
+ * TODO:
+ *  - Do we have to handle ping here?
  */
 
 static const int request_internal_ = 2;

@@ -1,5 +1,6 @@
 
 CFLAGS=-std=c99 -D _BSD_SOURCE -D _POSIX_C_SOURCE=2
+CC=gcc
 
 all: target
 

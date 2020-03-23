@@ -21,13 +21,13 @@ array* array_create(int element_size) {
 }
 
 array* array_append(array *arr, const void *element) {
-    char *data = retrive_data_(arr);
     if( arr->cap-arr->size==0 ) {
         /* Extend */
         arr = realloc(arr, sizeof(array)+(arr->cap+array_inc_size_)*arr->elesize);
         arr->cap += array_inc_size_;
     }
-
+    
+    char *data = retrive_data_(arr);
     memcpy( data+arr->size*arr->elesize, element, arr->elesize );
     arr->size ++;
     return arr;
